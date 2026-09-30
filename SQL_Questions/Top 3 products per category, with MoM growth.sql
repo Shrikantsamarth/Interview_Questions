@@ -9,21 +9,44 @@ events	      event_id, session_id, customer_id, event_type, event_ts	           
 
 1Q) Top 3 products per category, with MoM growth
 
-WITH m As (
-Select 
-p.product_id,
-p.Category, 
-Date_Truncate('Month', o.order_date) As Month,
-Sum(oi.Quantity * oi.unit_price) - o.Discount_pct As Revenue
-From Orders_items oi
-Left Join Orders o on o.order_id  = oi.order_id
-Left Join Products p on p.product_id = oi.product_id
-Group By 1,2,3
+ -----------Solution 1----------------
+WITH m AS (
+  SELECT p.category, p.product_id,
+         DATE_TRUNC('month', o.order_date) AS month,
+         SUM(oi.quantity * oi.unit_price) AS revenue
+  FROM order_items oi
+  JOIN orders o   ON o.order_id = oi.order_id
+  JOIN products p ON p.product_id = oi.product_id
+  GROUP BY 1, 2, 3
 )
----Rank, Mom growth
-Select *,
- Rank() Over (Partition by Category, month Order By Revenue Desc) AS Rnk
- Revenue / LAG(revenue) Over (Partition By product_id Order By Month) - 1 AS MoM_growth
- From m
+SELECT *,
+       RANK() OVER (PARTITION BY category, month ORDER BY revenue DESC) AS rnk,
+       revenue / LAG(revenue) OVER (PARTITION BY product_id ORDER BY month) - 1 AS mom_growth
+FROM m
+QUALIFY rnk <= 3;
 
- QUALIFY rnk<=3;
+
+----Solution 2---------------
+
+WITH monthly AS (
+  SELECT p.category, p.product_id,
+         DATE_TRUNC('month', o.order_date) AS month,
+         SUM(oi.quantity * oi.unit_price - oi.discount_amt) AS revenue
+  FROM order_items oi
+  JOIN orders o   ON o.order_id = oi.order_id
+  JOIN products p ON p.product_id = oi.product_id
+  WHERE o.status = 'completed'
+  GROUP BY 1, 2, 3
+),
+growth AS (
+  SELECT *,
+         LAG(revenue) OVER (PARTITION BY product_id ORDER BY month) AS prev_rev
+  FROM monthly
+),
+ranked AS (
+  SELECT *,
+         (revenue - prev_rev) / NULLIF(prev_rev, 0) AS mom_growth,
+         RANK() OVER (PARTITION BY category, month ORDER BY revenue DESC) AS rnk
+  FROM growth
+)
+SELECT * FROM ranked WHERE rnk <= 3;
